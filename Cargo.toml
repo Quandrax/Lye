@@ -1,0 +1,9 @@
+[package]
+name = "lye"
+version = "0.1.0"
+edition = "2021"
+author = "Quandrax"
+
+[dependencies]
+ash = "0.38.0"
+winit = "0.30.3"
