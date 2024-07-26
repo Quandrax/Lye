@@ -1,5 +1,6 @@
 use winit::event_loop::EventLoop;
 
+mod camera;
 mod setup;
 
 fn main() {
