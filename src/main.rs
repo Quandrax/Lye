@@ -8,4 +8,3 @@ fn main() {
 
     event_loop.run_app(&mut app).expect("do be not working");
 }
-

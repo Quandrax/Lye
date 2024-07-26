@@ -6,4 +6,5 @@ author = "Quandrax"
 
 [dependencies]
 ash = "0.38.0"
+glam = "0.28.0"
 winit = "0.30.3"
