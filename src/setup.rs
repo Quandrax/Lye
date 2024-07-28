@@ -1,4 +1,7 @@
-use ash::vk::{self};
+use ash::{
+    prelude::VkResult,
+    vk::{self},
+};
 use std::{ffi::CStr, ptr};
 use winit::{
     self,
@@ -15,9 +18,10 @@ pub struct VulkanRenderer {
 
 impl VulkanRenderer {
     pub fn new() -> Self {
-        let entry = unsafe { ash::Entry::load() }.unwrap();
-        let instance = VulkanRenderer::create_instance(&entry);
-        let physical_device = VulkanRenderer::get_physical_device(&instance);
+        let entry = unsafe { ash::Entry::load() }.expect("No entry");
+        let instance = VulkanRenderer::create_instance(&entry).expect("no instance");
+        let physical_device =
+            VulkanRenderer::get_physical_device(&instance).expect("No matching physical device");
 
         Self {
             window: None,
@@ -26,7 +30,7 @@ impl VulkanRenderer {
         }
     }
 
-    fn create_instance(entry: &ash::Entry) -> ash::Instance {
+    fn create_instance(entry: &ash::Entry) -> VkResult<ash::Instance> {
         let application_info = unsafe {
             vk::ApplicationInfo {
                 s_type: vk::StructureType::APPLICATION_INFO,
@@ -52,13 +56,20 @@ impl VulkanRenderer {
             _marker: Default::default(),
         };
 
-        unsafe { entry.create_instance(&create_info, None) }.unwrap()
+        unsafe { entry.create_instance(&create_info, None) }
     }
 
-    fn get_physical_device(instance: &ash::Instance) -> vk::PhysicalDevice {
-        let physical_devices = unsafe { instance.enumerate_physical_devices() }.unwrap();
-        let physical_device = physical_devices[0];
-        physical_device
+    fn get_physical_device(instance: &ash::Instance) -> Result<vk::PhysicalDevice, ()> {
+        let physical_devices =
+            unsafe { instance.enumerate_physical_devices() }.expect("No  physical device");
+
+        println!("{} Vulkan devie/s", physical_devices.len());
+
+        let result = Err(());
+
+        for &physical_device in physical_devices.iter() {}
+
+        result
     }
 }
 
