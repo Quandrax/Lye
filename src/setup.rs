@@ -61,13 +61,32 @@ impl VulkanRenderer {
 
     fn get_physical_device(instance: &ash::Instance) -> Result<vk::PhysicalDevice, ()> {
         let physical_devices =
-            unsafe { instance.enumerate_physical_devices() }.expect("No  physical device");
+            unsafe { instance.enumerate_physical_devices() }.expect("No physical device found");
 
-        println!("{} Vulkan devie/s", physical_devices.len());
+        println!("{} Vulkan device/s", physical_devices.len());
 
-        let result = Err(());
+        let mut result = Err(());
 
-        for &physical_device in physical_devices.iter() {}
+        if physical_devices.len() == 1 {
+            //I will change it some day so it works on other pcs but for now no
+            unsafe {
+                match instance
+                    .get_physical_device_properties(physical_devices[0])
+                    .device_type
+                {
+                    vk::PhysicalDeviceType::CPU => println!("Picked CPU"),
+                    vk::PhysicalDeviceType::INTEGRATED_GPU => println!("Picked Integrated GPU"),
+                    vk::PhysicalDeviceType::DISCRETE_GPU => println!("Picked Discrete GPU"),
+                    vk::PhysicalDeviceType::VIRTUAL_GPU => println!("Picked Virtual GPU"),
+                    vk::PhysicalDeviceType::OTHER => println!("I dont know what was picked"),
+                    _ => {
+                        println!("Just crash at this point");
+                        panic!();
+                    }
+                }
+            }
+            result = Ok(physical_devices[0]);
+        }
 
         result
     }
