@@ -2,7 +2,7 @@
 name = "lye"
 version = "0.1.0"
 edition = "2021"
-author = "Quandrax"
+author = "Quandraxus Maximus"
 
 [dependencies]
 ash = "0.38.0"
