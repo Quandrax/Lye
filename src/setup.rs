@@ -2,7 +2,7 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use std::{ffi::CStr, ptr};
+use std::{ffi::CStr, marker::PhantomData, ptr};
 use winit::{
     self,
     application::ApplicationHandler,
@@ -14,6 +14,7 @@ pub struct VulkanRenderer {
     window: Option<Window>,
     instance: ash::Instance,
     physical_device: vk::PhysicalDevice,
+    device: ash::Device,
 }
 
 impl VulkanRenderer {
@@ -22,11 +23,13 @@ impl VulkanRenderer {
         let instance = VulkanRenderer::create_instance(&entry).expect("no instance");
         let physical_device =
             VulkanRenderer::get_physical_device(&instance).expect("No matching physical device");
+        let device = VulkanRenderer::create_device(&instance, physical_device).expect("No device");
 
         Self {
             window: None,
             instance,
             physical_device,
+            device,
         }
     }
 
@@ -89,6 +92,26 @@ impl VulkanRenderer {
         }
 
         result
+    }
+
+    fn create_device(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> VkResult<ash::Device> {
+        let create_info = vk::DeviceCreateInfo {
+            s_type: vk::StructureType::DEVICE_CREATE_INFO,
+            p_next: (),
+            flags: (),
+            queue_create_info_count: (),
+            p_queue_create_infos: (),
+            enabled_layer_count: (),
+            pp_enabled_layer_names: (),
+            enabled_extension_count: (),
+            pp_enabled_extension_names: (),
+            p_enabled_features: (),
+            _marker: PhantomData::default(),
+        };
+        unsafe { instance.create_device(physical_device, &create_info, None) }
     }
 }
 
