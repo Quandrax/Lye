@@ -98,15 +98,46 @@ impl VulkanRenderer {
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
     ) -> VkResult<ash::Device> {
+        let queue_families =
+            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+
+        let mut queue_family_indices = None;
+
+        let mut index = 0;
+        for queue_family in queue_families.iter() {
+            if queue_family.queue_count > 0
+                && queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            {
+                queue_family_indices = Some(index);
+            }
+
+            if queue_family_indices.is_some() {
+                break;
+            }
+
+            index += 1;
+        }
+
+        let queue_priorities = [1.0];
+        let queue_create_info = vk::DeviceQueueCreateInfo {
+            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DeviceQueueCreateFlags::empty(),
+            queue_family_index: queue_family_indices.unwrap(),
+            queue_count: queue_priorities.len() as u32,
+            p_queue_priorities: queue_priorities.as_ptr(),
+            _marker: Default::default(),
+        };
+
         let create_info = vk::DeviceCreateInfo {
             s_type: vk::StructureType::DEVICE_CREATE_INFO,
-            p_next: (),
-            flags: (),
-            queue_create_info_count: (),
-            p_queue_create_infos: (),
-            enabled_extension_count: (),
-            pp_enabled_extension_names: (),
-            p_enabled_features: (),
+            p_next: ptr::null(),
+            flags: vk::DeviceCreateFlags::empty(),
+            queue_create_info_count: 1,
+            p_queue_create_infos: &queue_create_info,
+            enabled_extension_count: 0,
+            pp_enabled_extension_names: ptr::null(),
+            p_enabled_features: ptr::null(),
             ..Default::default()
         };
 
@@ -145,8 +176,8 @@ impl ApplicationHandler for VulkanRenderer {
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
         unsafe {
-            self.instance.destroy_instance(None);
             self.device.destroy_device(None);
+            self.instance.destroy_instance(None);
         };
     }
 }
