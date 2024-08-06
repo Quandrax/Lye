@@ -2,31 +2,47 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use std::{ffi::CStr, ptr};
+use std::ptr;
 use winit::{
     self,
     application::ApplicationHandler,
     event::WindowEvent,
+    event_loop::ActiveEventLoop,
+    raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{Window, WindowAttributes},
 };
 
-pub struct VulkanRenderer {
-    window: Option<Window>,
+pub(crate) struct IHateWinitVer30 {
+    pub(crate) game: Option<VulkanRenderer>,
+}
+pub(crate) struct VulkanRenderer {
+    window: Window,
     instance: ash::Instance,
     physical_device: vk::PhysicalDevice,
     device: ash::Device,
 }
 
 impl VulkanRenderer {
-    pub fn new() -> Self {
+    fn new(event_loop: &ActiveEventLoop) -> Self {
+        let window = event_loop
+            .create_window(
+                WindowAttributes::default()
+                    .with_title("Lye")
+                    .with_maximized(true)
+                    .with_resizable(false),
+            )
+            .expect("no window");
+
         let entry = unsafe { ash::Entry::load() }.expect("No entry");
         let instance = VulkanRenderer::create_instance(&entry).expect("no instance");
         let physical_device =
             VulkanRenderer::get_physical_device(&instance).expect("No matching physical device");
         let device = VulkanRenderer::create_device(&instance, physical_device).expect("No device");
+        let surface =
+            VulkanRenderer::create_surface(&window, &entry, &instance).expect("No surface");
 
         Self {
-            window: None,
+            window,
             instance,
             physical_device,
             device,
@@ -38,14 +54,21 @@ impl VulkanRenderer {
             vk::ApplicationInfo {
                 s_type: vk::StructureType::APPLICATION_INFO,
                 p_next: ptr::null(),
-                p_application_name: CStr::from_bytes_with_nul_unchecked(b"Lye\0").as_ptr(),
+                p_application_name: std::ffi::CStr::from_bytes_with_nul_unchecked(b"Lye\0")
+                    .as_ptr(),
                 application_version: 0,
-                p_engine_name: CStr::from_bytes_with_nul_unchecked(b"Fortnite-Engine\0").as_ptr(),
+                p_engine_name: std::ffi::CStr::from_bytes_with_nul_unchecked(b"Fortnite-Engine\0")
+                    .as_ptr(),
                 engine_version: 0,
                 api_version: vk::make_api_version(0, 1, 3, 0),
                 _marker: Default::default(),
             }
         };
+
+        let pp_enabled_extension_names = [
+            ash::khr::surface::NAME.as_ptr(),
+            ash::khr::win32_surface::NAME.as_ptr(),
+        ];
 
         let create_info = vk::InstanceCreateInfo {
             s_type: vk::StructureType::INSTANCE_CREATE_INFO,
@@ -54,8 +77,8 @@ impl VulkanRenderer {
             p_application_info: &application_info,
             enabled_layer_count: 0,
             pp_enabled_layer_names: ptr::null(),
-            enabled_extension_count: 0,
-            pp_enabled_extension_names: ptr::null(),
+            enabled_extension_count: pp_enabled_extension_names.len() as u32,
+            pp_enabled_extension_names: pp_enabled_extension_names.as_ptr(),
             _marker: Default::default(),
         };
 
@@ -129,34 +152,57 @@ impl VulkanRenderer {
             _marker: Default::default(),
         };
 
+        let extension_names = [ash::khr::swapchain::NAME.as_ptr()];
+
         let create_info = vk::DeviceCreateInfo {
             s_type: vk::StructureType::DEVICE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceCreateFlags::empty(),
             queue_create_info_count: 1,
             p_queue_create_infos: &queue_create_info,
-            enabled_extension_count: 0,
-            pp_enabled_extension_names: ptr::null(),
+            enabled_extension_count: extension_names.len() as u32,
+            pp_enabled_extension_names: extension_names.as_ptr(),
             p_enabled_features: ptr::null(),
             ..Default::default()
         };
 
         unsafe { instance.create_device(physical_device, &create_info, None) }
     }
+
+    fn create_surface(
+        window: &Window,
+        entry: &ash::Entry,
+        instance: &ash::Instance,
+    ) -> Result<vk::SurfaceKHR, vk::Result> {
+        #[cfg(target_os = "windows")]
+        let (hwnd, hinstance) = match window.window_handle().unwrap().as_raw() {
+            RawWindowHandle::Win32(handle) => (handle.hwnd.get(), handle.hinstance.unwrap().get()),
+            _ => {
+                println!("Heheheha");
+                panic!()
+            }
+        };
+
+        println!("hwnd {} hinstance {}", hwnd, hinstance);
+
+        let win32_surface_loader = ash::khr::win32_surface::Instance::new(entry, instance);
+        let create_info = vk::Win32SurfaceCreateInfoKHR {
+            s_type: vk::StructureType::WIN32_SURFACE_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            flags: vk::Win32SurfaceCreateFlagsKHR::empty(),
+            hinstance,
+            hwnd,
+            _marker: Default::default(),
+        };
+        unsafe { win32_surface_loader.create_win32_surface(&create_info, None) }
+    }
 }
 
-impl ApplicationHandler for VulkanRenderer {
+impl ApplicationHandler for IHateWinitVer30 {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.window = Some(
-            event_loop
-                .create_window(
-                    WindowAttributes::default()
-                        .with_title("Lye")
-                        .with_maximized(true)
-                        .with_resizable(false),
-                )
-                .expect("no window"),
-        );
+        if self.game.is_none() {
+            self.game = Some(VulkanRenderer::new(event_loop));
+        }
     }
 
     fn window_event(
