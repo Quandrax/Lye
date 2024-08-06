@@ -2,7 +2,7 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use std::{ffi::CStr, marker::PhantomData, ptr};
+use std::{ffi::CStr, ptr};
 use winit::{
     self,
     application::ApplicationHandler,
@@ -71,7 +71,7 @@ impl VulkanRenderer {
         let mut result = Err(());
 
         if physical_devices.len() == 1 {
-            //I will change it some day so it works on other pcs but for now no
+            //Reminder to change this some day so it works on every pc
             unsafe {
                 match instance
                     .get_physical_device_properties(physical_devices[0])
@@ -104,13 +104,12 @@ impl VulkanRenderer {
             flags: (),
             queue_create_info_count: (),
             p_queue_create_infos: (),
-            enabled_layer_count: (),
-            pp_enabled_layer_names: (),
             enabled_extension_count: (),
             pp_enabled_extension_names: (),
             p_enabled_features: (),
-            _marker: PhantomData::default(),
+            ..Default::default()
         };
+
         unsafe { instance.create_device(physical_device, &create_info, None) }
     }
 }
@@ -147,6 +146,7 @@ impl Drop for VulkanRenderer {
     fn drop(&mut self) {
         unsafe {
             self.instance.destroy_instance(None);
+            self.device.destroy_device(None);
         };
     }
 }
