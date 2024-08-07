@@ -2,7 +2,7 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use std::ptr;
+use std::{ffi::CStr, ptr};
 use winit::{
     self,
     application::ApplicationHandler,
@@ -35,11 +35,11 @@ impl VulkanRenderer {
 
         let entry = unsafe { ash::Entry::load() }.expect("No entry");
         let instance = VulkanRenderer::create_instance(&entry).expect("no instance");
+        let surface =
+            VulkanRenderer::create_surface(&window, &entry, &instance).expect("No surface");
         let physical_device =
             VulkanRenderer::get_physical_device(&instance).expect("No matching physical device");
         let device = VulkanRenderer::create_device(&instance, physical_device).expect("No device");
-        let surface =
-            VulkanRenderer::create_surface(&window, &entry, &instance).expect("No surface");
 
         Self {
             window,
@@ -51,18 +51,12 @@ impl VulkanRenderer {
 
     fn create_instance(entry: &ash::Entry) -> VkResult<ash::Instance> {
         let application_info = unsafe {
-            vk::ApplicationInfo {
-                s_type: vk::StructureType::APPLICATION_INFO,
-                p_next: ptr::null(),
-                p_application_name: std::ffi::CStr::from_bytes_with_nul_unchecked(b"Lye\0")
-                    .as_ptr(),
-                application_version: 0,
-                p_engine_name: std::ffi::CStr::from_bytes_with_nul_unchecked(b"Fortnite-Engine\0")
-                    .as_ptr(),
-                engine_version: 0,
-                api_version: vk::make_api_version(0, 1, 3, 0),
-                _marker: Default::default(),
-            }
+            vk::ApplicationInfo::default()
+                .application_name(CStr::from_bytes_with_nul_unchecked(b"Lye\0"))
+                .application_version(0)
+                .engine_name(CStr::from_bytes_with_nul_unchecked(b"Fortnite-Engine\0"))
+                .engine_version(0)
+                .api_version(vk::make_api_version(0, 1, 3, 0))
         };
 
         let pp_enabled_extension_names = [
@@ -83,6 +77,32 @@ impl VulkanRenderer {
         };
 
         unsafe { entry.create_instance(&create_info, None) }
+    }
+
+    fn create_surface(
+        window: &Window,
+        entry: &ash::Entry,
+        instance: &ash::Instance,
+    ) -> Result<vk::SurfaceKHR, vk::Result> {
+        #[cfg(target_os = "windows")]
+        let (hwnd, hinstance) = match window.window_handle().unwrap().as_raw() {
+            RawWindowHandle::Win32(handle) => (handle.hwnd.get(), handle.hinstance.unwrap().get()),
+            _ => {
+                println!("Heheheha");
+                panic!()
+            }
+        };
+
+        let win32_surface_loader = ash::khr::win32_surface::Instance::new(entry, instance);
+        let create_info = vk::Win32SurfaceCreateInfoKHR {
+            s_type: vk::StructureType::WIN32_SURFACE_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            flags: vk::Win32SurfaceCreateFlagsKHR::empty(),
+            hinstance,
+            hwnd,
+            _marker: Default::default(),
+        };
+        unsafe { win32_surface_loader.create_win32_surface(&create_info, None) }
     }
 
     fn get_physical_device(instance: &ash::Instance) -> Result<vk::PhysicalDevice, ()> {
@@ -168,34 +188,6 @@ impl VulkanRenderer {
 
         unsafe { instance.create_device(physical_device, &create_info, None) }
     }
-
-    fn create_surface(
-        window: &Window,
-        entry: &ash::Entry,
-        instance: &ash::Instance,
-    ) -> Result<vk::SurfaceKHR, vk::Result> {
-        #[cfg(target_os = "windows")]
-        let (hwnd, hinstance) = match window.window_handle().unwrap().as_raw() {
-            RawWindowHandle::Win32(handle) => (handle.hwnd.get(), handle.hinstance.unwrap().get()),
-            _ => {
-                println!("Heheheha");
-                panic!()
-            }
-        };
-
-        println!("hwnd {} hinstance {}", hwnd, hinstance);
-
-        let win32_surface_loader = ash::khr::win32_surface::Instance::new(entry, instance);
-        let create_info = vk::Win32SurfaceCreateInfoKHR {
-            s_type: vk::StructureType::WIN32_SURFACE_CREATE_INFO_KHR,
-            p_next: ptr::null(),
-            flags: vk::Win32SurfaceCreateFlagsKHR::empty(),
-            hinstance,
-            hwnd,
-            _marker: Default::default(),
-        };
-        unsafe { win32_surface_loader.create_win32_surface(&create_info, None) }
-    }
 }
 
 impl ApplicationHandler for IHateWinitVer30 {
@@ -221,9 +213,9 @@ impl ApplicationHandler for IHateWinitVer30 {
 
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
-        unsafe {
+        /*unsafe {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
-        };
+        };*/
     }
 }
