@@ -2,6 +2,7 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
+use core::panic;
 use std::{ffi::CStr, ptr};
 use winit::{
     self,
@@ -12,18 +13,21 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
+#[derive(Default)]
 pub(crate) struct IHateWinitVer30 {
-    pub(crate) game: Option<VulkanRenderer>,
+    game: Option<VulkanRenderer>,
 }
-pub(crate) struct VulkanRenderer {
+
+struct VulkanRenderer {
     window: Window,
     instance: ash::Instance,
+    surface: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
     device: ash::Device,
 }
 
 impl VulkanRenderer {
-    fn new(event_loop: &ActiveEventLoop) -> Self {
+    fn new(event_loop: &ActiveEventLoop) -> Result<Self, Box<dyn std::error::Error>> {
         let window = event_loop
             .create_window(
                 WindowAttributes::default()
@@ -33,20 +37,19 @@ impl VulkanRenderer {
             )
             .expect("no window");
 
-        let entry = unsafe { ash::Entry::load() }.expect("No entry");
-        let instance = VulkanRenderer::create_instance(&entry).expect("no instance");
-        let surface =
-            VulkanRenderer::create_surface(&window, &entry, &instance).expect("No surface");
-        let physical_device =
-            VulkanRenderer::get_physical_device(&instance).expect("No matching physical device");
-        let device = VulkanRenderer::create_device(&instance, physical_device).expect("No device");
+        let entry = unsafe { ash::Entry::load() }?;
+        let instance = VulkanRenderer::create_instance(&entry)?;
+        let surface = VulkanRenderer::create_surface(&window, &entry, &instance)?;
+        let physical_device = VulkanRenderer::get_physical_device(&instance)?;
+        let device = VulkanRenderer::create_device(&instance, physical_device)?;
 
-        Self {
+        Ok(Self {
             window,
             instance,
+            surface,
             physical_device,
             device,
-        }
+        })
     }
 
     fn create_instance(entry: &ash::Entry) -> VkResult<ash::Instance> {
@@ -60,7 +63,7 @@ impl VulkanRenderer {
         };
         //Dont like this StructType::default() thing, so wont continue using this
 
-        let pp_enabled_extension_names = [
+        let extension_names = [
             ash::khr::surface::NAME.as_ptr(),
             ash::khr::win32_surface::NAME.as_ptr(),
         ];
@@ -72,8 +75,8 @@ impl VulkanRenderer {
             p_application_info: &application_info,
             enabled_layer_count: 0,
             pp_enabled_layer_names: ptr::null(),
-            enabled_extension_count: pp_enabled_extension_names.len() as u32,
-            pp_enabled_extension_names: pp_enabled_extension_names.as_ptr(),
+            enabled_extension_count: extension_names.len() as u32,
+            pp_enabled_extension_names: extension_names.as_ptr(),
             _marker: Default::default(),
         };
 
@@ -88,10 +91,7 @@ impl VulkanRenderer {
         #[cfg(target_os = "windows")]
         let (hwnd, hinstance) = match window.window_handle().unwrap().as_raw() {
             RawWindowHandle::Win32(handle) => (handle.hwnd.get(), handle.hinstance.unwrap().get()),
-            _ => {
-                println!("Heheheha");
-                panic!()
-            }
+            _ => panic!(),
         }; //Reminder 1 to change in the future
 
         let win32_surface_loader = ash::khr::win32_surface::Instance::new(entry, instance);
@@ -106,13 +106,16 @@ impl VulkanRenderer {
         unsafe { win32_surface_loader.create_win32_surface(&create_info, None) }
     }
 
-    fn get_physical_device(instance: &ash::Instance) -> Result<vk::PhysicalDevice, ()> {
-        let physical_devices =
-            unsafe { instance.enumerate_physical_devices() }.expect("No physical device found");
+    fn get_physical_device(instance: &ash::Instance) -> Result<vk::PhysicalDevice, vk::Result> {
+        let physical_devices = unsafe { instance.enumerate_physical_devices() }.unwrap();
+
+        let mut result = Err(vk::Result::INCOMPLETE);
+
+        if physical_devices.len() == 0 {
+            return result;
+        }
 
         println!("{} Vulkan device/s", physical_devices.len());
-
-        let mut result = Err(());
 
         if physical_devices.len() == 1 {
             //Reminder 2 to change this some day so it works on every pc
@@ -194,10 +197,11 @@ impl VulkanRenderer {
 impl ApplicationHandler for IHateWinitVer30 {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.game.is_none() {
-            self.game = Some(VulkanRenderer::new(event_loop));
+            self.game = Some(VulkanRenderer::new(event_loop).unwrap());
         }
     }
 
+    #[inline]
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -206,17 +210,17 @@ impl ApplicationHandler for IHateWinitVer30 {
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::RedrawRequested => (),
+            WindowEvent::RedrawRequested => println!("Redraw requested"),
             _ => (),
         }
     }
 }
 
-impl Drop for VulkanRenderer {
+/*impl Drop for VulkanRenderer {
     fn drop(&mut self) {
-        /*unsafe {
+        unsafe {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
-        };*/
-    } //Getting Status_Access_Violation error using this, reminder 3 to fix it one day
-}
+        };
+    } Getting Status_Access_Violation error using this, reminder 3 to fix it one day
+}*/
