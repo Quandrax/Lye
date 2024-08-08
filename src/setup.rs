@@ -58,6 +58,7 @@ impl VulkanRenderer {
                 .engine_version(0)
                 .api_version(vk::make_api_version(0, 1, 3, 0))
         };
+        //Dont like this StructType::default() thing, so wont continue using this
 
         let pp_enabled_extension_names = [
             ash::khr::surface::NAME.as_ptr(),
@@ -91,7 +92,7 @@ impl VulkanRenderer {
                 println!("Heheheha");
                 panic!()
             }
-        };
+        }; //Reminder 1 to change in the future
 
         let win32_surface_loader = ash::khr::win32_surface::Instance::new(entry, instance);
         let create_info = vk::Win32SurfaceCreateInfoKHR {
@@ -114,7 +115,7 @@ impl VulkanRenderer {
         let mut result = Err(());
 
         if physical_devices.len() == 1 {
-            //Reminder to change this some day so it works on every pc
+            //Reminder 2 to change this some day so it works on every pc
             unsafe {
                 match instance
                     .get_physical_device_properties(physical_devices[0])
@@ -217,5 +218,5 @@ impl Drop for VulkanRenderer {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         };*/
-    }
+    } //Getting Status_Access_Violation error using this, reminder 3 to fix it one day
 }
