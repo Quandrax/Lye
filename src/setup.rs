@@ -18,7 +18,7 @@ pub(crate) struct IHateWinitVer30 {
     game: Option<VulkanRenderer>,
 }
 
-struct VulkanRenderer {
+pub struct VulkanRenderer {
     window: Window,
     instance: ash::Instance,
     surface: vk::SurfaceKHR,
@@ -29,10 +29,14 @@ struct VulkanRenderer {
     gq_family_index: u32,
     swapchain_loader: ash::khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
+    format: vk::Format,
+    images: Vec<vk::Image>,
+    image_views: Vec<vk::ImageView>,
+    renderpass: vk::RenderPass,
 }
 
 impl VulkanRenderer {
-    fn new(event_loop: &ActiveEventLoop) -> Result<Self, vk::Result> {
+    pub fn new(event_loop: &ActiveEventLoop) -> Result<Self, vk::Result> {
         let window = event_loop
             .create_window(
                 WindowAttributes::default()
@@ -49,14 +53,16 @@ impl VulkanRenderer {
         let physical_device = VulkanRenderer::get_physical_device(&instance)?;
         let (device, graphics_queue, gq_family_index) =
             VulkanRenderer::create_device(&instance, physical_device)?;
-        let (swapchain, swapchain_loader) = VulkanRenderer::create_swapchain(
-            &instance,
-            &surface_loader,
-            physical_device,
-            gq_family_index,
-            surface,
-            &device,
-        )?;
+        let (swapchain, swapchain_loader, format, images, image_views) =
+            VulkanRenderer::create_swapchain(
+                &instance,
+                &surface_loader,
+                physical_device,
+                gq_family_index,
+                surface,
+                &device,
+            )?;
+        let renderpass = VulkanRenderer::create_render_pass(&device, format)?;
 
         Ok(Self {
             window,
@@ -69,6 +75,10 @@ impl VulkanRenderer {
             gq_family_index,
             swapchain_loader,
             swapchain,
+            format,
+            images,
+            image_views,
+            renderpass,
         })
     }
 
@@ -248,7 +258,13 @@ impl VulkanRenderer {
         queue_family_index: u32,
         surface: vk::SurfaceKHR,
         device: &ash::Device,
-    ) -> VkResult<(vk::SwapchainKHR, ash::khr::swapchain::Device)> {
+    ) -> VkResult<(
+        vk::SwapchainKHR,
+        ash::khr::swapchain::Device,
+        vk::Format,
+        Vec<vk::Image>,
+        Vec<vk::ImageView>,
+    )> {
         unsafe {
             if !surface_loader
                 .get_physical_device_surface_support(physical_device, queue_family_index, surface)
@@ -277,7 +293,6 @@ impl VulkanRenderer {
                         .get_physical_device_surface_capabilities(physical_device, surface)
                         .unwrap()
                         .current_extent;
-                    println!("Extent : {:?}", y);
                     y
                 }
             }
@@ -285,11 +300,13 @@ impl VulkanRenderer {
 
         unsafe {
             println!(
-                "Min image count {}",
+                "Min image count {}, format : {:?}, resolution : {:?}",
                 surface_loader
                     .get_physical_device_surface_capabilities(physical_device, surface)
                     .unwrap()
-                    .min_image_count
+                    .min_image_count,
+                image_format,
+                img_resolution
             )
         };
 
@@ -299,7 +316,7 @@ impl VulkanRenderer {
             p_next: ptr::null(),
             flags: vk::SwapchainCreateFlagsKHR::empty(),
             surface,
-            min_image_count: 1,
+            min_image_count: 3,
             image_format: image_format.format,
             image_color_space: image_format.color_space,
             image_extent: img_resolution,
@@ -316,15 +333,106 @@ impl VulkanRenderer {
             _marker: Default::default(),
         };
 
-        let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None) }?;
-        Ok((swapchain, swapchain_loader))
+        let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None)? };
+        let images = unsafe { swapchain_loader.get_swapchain_images(swapchain)? };
+        let mut image_views = Vec::with_capacity(images.len());
+
+        for image in images.iter() {
+            let img_create_info = vk::ImageViewCreateInfo {
+                s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::ImageViewCreateFlags::empty(),
+                image: *image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: image_format.format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                _marker: Default::default(),
+            };
+
+            image_views.push(unsafe { device.create_image_view(&img_create_info, None)? });
+        }
+
+        Ok((
+            swapchain,
+            swapchain_loader,
+            image_format.format,
+            images,
+            image_views,
+        ))
+    }
+
+    fn create_render_pass(device: &ash::Device, format: vk::Format) -> VkResult<vk::RenderPass> {
+        let attachment = vk::AttachmentDescription {
+            flags: vk::AttachmentDescriptionFlags::empty(),
+            format,
+            samples: vk::SampleCountFlags::TYPE_1,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::STORE,
+            stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
+            stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+        };
+
+        let color_attachment_ref = vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        let subpass = vk::SubpassDescription {
+            flags: vk::SubpassDescriptionFlags::empty(),
+            p_color_attachments: &color_attachment_ref,
+            pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
+            ..Default::default()
+        };
+
+        let subpass_dependencies = vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
+                | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dependency_flags: vk::DependencyFlags::empty(),
+        };
+
+        let renderpass_create_info = vk::RenderPassCreateInfo {
+            s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::RenderPassCreateFlags::empty(),
+            attachment_count: 1,
+            p_attachments: &attachment,
+            subpass_count: 1,
+            p_subpasses: &subpass,
+            dependency_count: 1,
+            p_dependencies: &subpass_dependencies,
+            _marker: Default::default(),
+        };
+
+        Ok(unsafe { device.create_render_pass(&renderpass_create_info, None)? })
     }
 }
 
 impl ApplicationHandler for IHateWinitVer30 {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.game.is_none() {
-            self.game = Some(VulkanRenderer::new(event_loop).unwrap());
+            self.game = Some(VulkanRenderer::new(event_loop).unwrap_or_else(|err| {
+                println!("Error : {}", err);
+                panic!()
+            }));
         }
     }
 
@@ -346,11 +454,15 @@ impl ApplicationHandler for IHateWinitVer30 {
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_render_pass(self.renderpass, None);
+            for image_view in self.image_views.iter_mut() {
+                self.device.destroy_image_view(*image_view, None)
+            }
             self.swapchain_loader
                 .destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
         };
-    } //Getting Status_Access_Violation error using this, reminder 3 to fix it one day
+    }
 }
