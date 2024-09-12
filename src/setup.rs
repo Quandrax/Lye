@@ -30,9 +30,13 @@ pub struct VulkanRenderer {
     swapchain_loader: ash::khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
     format: vk::Format,
+    extent: vk::Extent2D,
     images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
     renderpass: vk::RenderPass,
+    framebuffers: Vec<vk::Framebuffer>,
+    command_pool: vk::CommandPool,
+    command_buffers: Vec<vk::CommandBuffer>,
 }
 
 impl VulkanRenderer {
@@ -53,7 +57,7 @@ impl VulkanRenderer {
         let physical_device = VulkanRenderer::get_physical_device(&instance)?;
         let (device, graphics_queue, gq_family_index) =
             VulkanRenderer::create_device(&instance, physical_device)?;
-        let (swapchain, swapchain_loader, format, images, image_views) =
+        let (swapchain, swapchain_loader, format, extent, images, image_views) =
             VulkanRenderer::create_swapchain(
                 &instance,
                 &surface_loader,
@@ -63,6 +67,10 @@ impl VulkanRenderer {
                 &device,
             )?;
         let renderpass = VulkanRenderer::create_render_pass(&device, format)?;
+        let framebuffers =
+            VulkanRenderer::create_framebuffers(&device, renderpass, &image_views, extent)?;
+        let (command_pool, command_buffers) =
+            VulkanRenderer::create_command(gq_family_index, &device, images.len())?;
 
         Ok(Self {
             window,
@@ -76,9 +84,13 @@ impl VulkanRenderer {
             swapchain_loader,
             swapchain,
             format,
+            extent,
             images,
             image_views,
             renderpass,
+            framebuffers,
+            command_pool,
+            command_buffers,
         })
     }
 
@@ -262,6 +274,7 @@ impl VulkanRenderer {
         vk::SwapchainKHR,
         ash::khr::swapchain::Device,
         vk::Format,
+        vk::Extent2D,
         Vec<vk::Image>,
         Vec<vk::ImageView>,
     )> {
@@ -368,6 +381,7 @@ impl VulkanRenderer {
             swapchain,
             swapchain_loader,
             image_format.format,
+            img_resolution,
             images,
             image_views,
         ))
@@ -424,6 +438,63 @@ impl VulkanRenderer {
 
         Ok(unsafe { device.create_render_pass(&renderpass_create_info, None)? })
     }
+
+    fn create_framebuffers(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        image_views: &[vk::ImageView],
+        extent: vk::Extent2D,
+    ) -> VkResult<Vec<vk::Framebuffer>> {
+        let mut framebuffers = Vec::with_capacity(image_views.len());
+
+        for image in image_views {
+            let framebuffer_create_info = vk::FramebufferCreateInfo {
+                s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::FramebufferCreateFlags::empty(),
+                render_pass,
+                p_attachments: image,
+                attachment_count: 1,
+                width: extent.width,
+                height: extent.height,
+                layers: 1,
+                _marker: Default::default(),
+            };
+            framebuffers
+                .push(unsafe { device.create_framebuffer(&framebuffer_create_info, None)? });
+        }
+
+        Ok(framebuffers)
+    }
+
+    fn create_command(
+        queue_family_index: u32,
+        device: &ash::Device,
+        count: usize,
+    ) -> VkResult<(vk::CommandPool, Vec<vk::CommandBuffer>)> {
+        let commandpool_create_info = vk::CommandPoolCreateInfo {
+            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandPoolCreateFlags::TRANSIENT,
+            queue_family_index,
+            _marker: Default::default(),
+        };
+
+        let command_pool = unsafe { device.create_command_pool(&commandpool_create_info, None)? };
+
+        let allocate_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: ptr::null(),
+            command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: count as u32,
+            _marker: Default::default(),
+        };
+
+        let command_buffers = unsafe { device.allocate_command_buffers(&allocate_info)? };
+
+        Ok((command_pool, command_buffers))
+    }
 }
 
 impl ApplicationHandler for IHateWinitVer30 {
@@ -453,6 +524,11 @@ impl ApplicationHandler for IHateWinitVer30 {
 
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
+        for framebuffer in self.framebuffers.iter_mut() {
+            unsafe {
+                self.device.destroy_framebuffer(*framebuffer, None);
+            }
+        }
         unsafe {
             self.device.destroy_render_pass(self.renderpass, None);
             for image_view in self.image_views.iter_mut() {
