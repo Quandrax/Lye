@@ -3,7 +3,10 @@ use ash::{
     vk::{self},
 };
 use core::panic;
-use std::{ffi::CStr, ptr};
+use std::{
+    ffi::{CStr, CString},
+    ptr,
+};
 use winit::{
     self,
     application::ApplicationHandler,
@@ -35,6 +38,8 @@ pub struct VulkanRenderer {
     image_views: Vec<vk::ImageView>,
     renderpass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
 }
@@ -71,6 +76,8 @@ impl VulkanRenderer {
             VulkanRenderer::create_framebuffers(&device, renderpass, &image_views, extent)?;
         let (command_pool, command_buffers) =
             VulkanRenderer::create_command(gq_family_index, &device, images.len())?;
+        let (pipeline, pipeline_layout) =
+            VulkanRenderer::create_pipeline(&device, renderpass, extent)?;
 
         Ok(Self {
             window,
@@ -89,6 +96,8 @@ impl VulkanRenderer {
             image_views,
             renderpass,
             framebuffers,
+            pipeline,
+            pipeline_layout,
             command_pool,
             command_buffers,
         })
@@ -467,6 +476,184 @@ impl VulkanRenderer {
         Ok(framebuffers)
     }
 
+    fn create_pipeline(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        extent: vk::Extent2D,
+    ) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
+        let mut cursor = std::io::Cursor::new(&include_bytes!("../shaders/vertex.spv")[..]);
+        let vertex_bytes = ash::util::read_spv(&mut cursor).unwrap();
+        let vertex_create_info = vk::ShaderModuleCreateInfo::default().code(&vertex_bytes);
+        let vertex_module = unsafe { device.create_shader_module(&vertex_create_info, None)? };
+
+        cursor = std::io::Cursor::new(&include_bytes!("../shaders/fragment.spv")[..]);
+        let fragment_bytes = ash::util::read_spv(&mut cursor).unwrap();
+        let fragment_create_info = vk::ShaderModuleCreateInfo::default().code(&fragment_bytes);
+        let fragment_module = unsafe { device.create_shader_module(&fragment_create_info, None)? };
+
+        let entry = CString::new("main").unwrap();
+
+        let shader_states_create_infos = [
+            vk::PipelineShaderStageCreateInfo {
+                s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::PipelineShaderStageCreateFlags::empty(),
+                stage: vk::ShaderStageFlags::VERTEX,
+                module: vertex_module,
+                p_name: entry.as_ptr(),
+                p_specialization_info: ptr::null(),
+                _marker: Default::default(),
+            },
+            vk::PipelineShaderStageCreateInfo {
+                s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::PipelineShaderStageCreateFlags::empty(),
+                stage: vk::ShaderStageFlags::FRAGMENT,
+                module: fragment_module,
+                p_name: entry.as_ptr(),
+                p_specialization_info: ptr::null(),
+                _marker: Default::default(),
+            },
+        ];
+
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineVertexInputStateCreateFlags::empty(),
+            vertex_attribute_description_count: 0,
+            vertex_binding_description_count: 0,
+            p_vertex_attribute_descriptions: ptr::null(),
+            p_vertex_binding_descriptions: ptr::null(),
+            _marker: Default::default(),
+        };
+
+        let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineInputAssemblyStateCreateFlags::empty(),
+            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            primitive_restart_enable: 0,
+            _marker: Default::default(),
+        };
+
+        let viewports = [vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }];
+
+        let scissors = [vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        }];
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineViewportStateCreateFlags::empty(),
+            viewport_count: 1,
+            p_viewports: viewports.as_ptr(),
+            scissor_count: 1,
+            p_scissors: scissors.as_ptr(),
+            _marker: Default::default(),
+        };
+
+        let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineRasterizationStateCreateFlags::empty(),
+            depth_clamp_enable: 0,
+            rasterizer_discard_enable: 0,
+            polygon_mode: vk::PolygonMode::FILL,
+            cull_mode: vk::CullModeFlags::BACK,
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            depth_bias_enable: 0,
+            depth_bias_constant_factor: 0.0,
+            depth_bias_clamp: 0.0,
+            depth_bias_slope_factor: 0.0,
+            line_width: 1.0,
+            _marker: Default::default(),
+        };
+
+        let multisample_state = vk::PipelineMultisampleStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineMultisampleStateCreateFlags::empty(),
+            rasterization_samples: vk::SampleCountFlags::TYPE_1,
+            sample_shading_enable: 0,
+            min_sample_shading: 1.0,
+            p_sample_mask: ptr::null(),
+            alpha_to_coverage_enable: 0,
+            alpha_to_one_enable: 0,
+            _marker: Default::default(),
+        };
+
+        let color_blend_attachments = [vk::PipelineColorBlendAttachmentState {
+            blend_enable: 0,
+            src_color_blend_factor: vk::BlendFactor::ONE,
+            dst_color_blend_factor: vk::BlendFactor::ZERO,
+            color_blend_op: vk::BlendOp::ADD,
+            src_alpha_blend_factor: vk::BlendFactor::ONE,
+            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+            alpha_blend_op: vk::BlendOp::ADD,
+            color_write_mask: vk::ColorComponentFlags::RGBA,
+        }];
+
+        let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineColorBlendStateCreateFlags::empty(),
+            logic_op: vk::LogicOp::COPY,
+            logic_op_enable: 0,
+            attachment_count: 1,
+            p_attachments: color_blend_attachments.as_ptr(),
+            blend_constants: [0.0, 0.0, 0.0, 0.0],
+            _marker: Default::default(),
+        };
+
+        let layout_info = vk::PipelineLayoutCreateInfo::default();
+        let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+
+        let pipeline_create_info = [vk::GraphicsPipelineCreateInfo {
+            s_type: vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineCreateFlags::empty(),
+            stage_count: shader_states_create_infos.len() as u32,
+            p_stages: shader_states_create_infos.as_ptr(),
+            p_vertex_input_state: &vertex_input_state,
+            p_input_assembly_state: &input_assembly_state,
+            p_tessellation_state: ptr::null(),
+            p_viewport_state: &viewport_state,
+            p_rasterization_state: &rasterization_state,
+            p_multisample_state: &multisample_state,
+            p_depth_stencil_state: ptr::null(),
+            p_color_blend_state: &color_blend_state,
+            p_dynamic_state: ptr::null(),
+            layout: pipeline_layout,
+            render_pass,
+            subpass: 0,
+            base_pipeline_handle: vk::Pipeline::default(),
+            base_pipeline_index: Default::default(),
+            _marker: Default::default(),
+        }];
+
+        let pipeline = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_create_info, None)
+                .unwrap()[0]
+        };
+
+        unsafe {
+            device.destroy_shader_module(vertex_module, None);
+            device.destroy_shader_module(fragment_module, None);
+        };
+
+        Ok((pipeline, pipeline_layout))
+    }
+
     fn create_command(
         queue_family_index: u32,
         device: &ash::Device,
@@ -524,12 +711,12 @@ impl ApplicationHandler for IHateWinitVer30 {
 
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
-        for framebuffer in self.framebuffers.iter_mut() {
-            unsafe {
+        unsafe {
+            self.device.destroy_command_pool(self.command_pool, None);
+            for framebuffer in self.framebuffers.iter_mut() {
                 self.device.destroy_framebuffer(*framebuffer, None);
             }
-        }
-        unsafe {
+
             self.device.destroy_render_pass(self.renderpass, None);
             for image_view in self.image_views.iter_mut() {
                 self.device.destroy_image_view(*image_view, None)
