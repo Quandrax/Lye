@@ -42,6 +42,10 @@ pub struct VulkanRenderer {
     pipeline_layout: vk::PipelineLayout,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
+    image_available: Vec<vk::Semaphore>,
+    render_finished: Vec<vk::Semaphore>,
+    can_draw: Vec<vk::Fence>,
+    current_image: usize,
 }
 
 impl VulkanRenderer {
@@ -75,9 +79,12 @@ impl VulkanRenderer {
         let framebuffers =
             VulkanRenderer::create_framebuffers(&device, renderpass, &image_views, extent)?;
         let (command_pool, command_buffers) =
-            VulkanRenderer::create_command(gq_family_index, &device, images.len())?;
+            VulkanRenderer::create_command_buffers(gq_family_index, &device, images.len())?;
         let (pipeline, pipeline_layout) =
             VulkanRenderer::create_pipeline(&device, renderpass, extent)?;
+
+        let (image_available, render_finished, can_draw) =
+            VulkanRenderer::create_semaphores_and_fences(images.len(), &device)?;
 
         Ok(Self {
             window,
@@ -100,6 +107,10 @@ impl VulkanRenderer {
             pipeline_layout,
             command_pool,
             command_buffers,
+            image_available,
+            render_finished,
+            can_draw,
+            current_image: 0,
         })
     }
 
@@ -654,7 +665,7 @@ impl VulkanRenderer {
         Ok((pipeline, pipeline_layout))
     }
 
-    fn create_command(
+    fn create_command_buffers(
         queue_family_index: u32,
         device: &ash::Device,
         count: usize,
@@ -662,7 +673,7 @@ impl VulkanRenderer {
         let commandpool_create_info = vk::CommandPoolCreateInfo {
             s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
             p_next: ptr::null(),
-            flags: vk::CommandPoolCreateFlags::TRANSIENT,
+            flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             queue_family_index,
             _marker: Default::default(),
         };
@@ -681,6 +692,96 @@ impl VulkanRenderer {
         let command_buffers = unsafe { device.allocate_command_buffers(&allocate_info)? };
 
         Ok((command_pool, command_buffers))
+    }
+
+    fn record_command_buffer(
+        device: &ash::Device,
+        command_buffers: &[vk::CommandBuffer],
+        render_pass: vk::RenderPass,
+        framebuffers: &[vk::Framebuffer],
+        extent: vk::Extent2D,
+        pipeline: vk::Pipeline,
+    ) -> VkResult<()> {
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandBufferUsageFlags::empty(),
+            p_inheritance_info: ptr::null(),
+            _marker: Default::default(),
+        };
+        let clear_values = [vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        }];
+
+        for (i, &command_buffer) in command_buffers.iter().enumerate() {
+            unsafe { device.begin_command_buffer(command_buffer, &begin_info)? };
+            let render_pass_begin_info = vk::RenderPassBeginInfo {
+                s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
+                p_next: ptr::null(),
+                render_pass,
+                framebuffer: framebuffers[i],
+                render_area: vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                },
+                clear_value_count: 1,
+                p_clear_values: clear_values.as_ptr(),
+                _marker: Default::default(),
+            };
+            unsafe {
+                device.cmd_begin_render_pass(
+                    command_buffer,
+                    &render_pass_begin_info,
+                    vk::SubpassContents::INLINE,
+                );
+
+                device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                device.cmd_draw(command_buffer, 3, 1, 0, 0);
+                device.cmd_end_render_pass(command_buffer);
+                device.end_command_buffer(command_buffer)?;
+            };
+        }
+
+        Ok(())
+    }
+
+    fn create_semaphores_and_fences(
+        images_len: usize,
+        device: &ash::Device,
+    ) -> VkResult<(Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>)> {
+        let (mut available, mut finished, mut can_draw) = (
+            Vec::with_capacity(images_len),
+            Vec::with_capacity(images_len),
+            Vec::with_capacity(images_len),
+        );
+        let semaphore_create_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::SemaphoreCreateFlags::empty(),
+            _marker: Default::default(),
+        };
+        let fence_create_info = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::SIGNALED,
+            _marker: Default::default(),
+        };
+
+        for _ in 0..images_len {
+            unsafe {
+                available.push(device.create_semaphore(&semaphore_create_info, None)?);
+                finished.push(device.create_semaphore(&semaphore_create_info, None)?);
+                can_draw.push(device.create_fence(&fence_create_info, None)?);
+            };
+        }
+
+        Ok((available, finished, can_draw))
+    }
+
+    fn current_image(&mut self) {
+        self.current_image = (self.current_image + 1) % self.image_views.len();
     }
 }
 
@@ -703,7 +804,9 @@ impl ApplicationHandler for IHateWinitVer30 {
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::RedrawRequested => println!("Redraw requested"),
+            WindowEvent::RedrawRequested => {
+                let renderer = self.game.as_mut().unwrap();
+            }
             _ => (),
         }
     }
@@ -712,11 +815,20 @@ impl ApplicationHandler for IHateWinitVer30 {
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
         unsafe {
+            for semaphore in self.image_available.iter() {
+                self.device.destroy_semaphore(*semaphore, None);
+            }
+            for semaphore in self.render_finished.iter() {
+                self.device.destroy_semaphore(*semaphore, None);
+            }
+            for fence in self.can_draw.iter() {
+                self.device.destroy_fence(*fence, None);
+            }
             self.device.destroy_command_pool(self.command_pool, None);
+            self.device.destroy_pipeline(self.pipeline, None);
             for framebuffer in self.framebuffers.iter_mut() {
                 self.device.destroy_framebuffer(*framebuffer, None);
             }
-
             self.device.destroy_render_pass(self.renderpass, None);
             for image_view in self.image_views.iter_mut() {
                 self.device.destroy_image_view(*image_view, None)
