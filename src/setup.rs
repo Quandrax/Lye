@@ -464,7 +464,7 @@ impl Renderer {
             attachment: 0,
             layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         };
-        //How attachments are used (layout) and which attachmentdescritions are used for current subpass
+        //How attachments are used (layout) and which attachmentdescriptions are used for current subpass
 
         let subpass_description = vk::SubpassDescription {
             flags: vk::SubpassDescriptionFlags::empty(),
@@ -635,7 +635,7 @@ impl Renderer {
             rasterizer_discard_enable: vk::FALSE,
             polygon_mode: vk::PolygonMode::FILL,
             cull_mode: vk::CullModeFlags::BACK,
-            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            front_face: vk::FrontFace::CLOCKWISE,
             depth_bias_enable: vk::FALSE,
             depth_bias_constant_factor: 0.0,
             depth_bias_clamp: 0.0,
@@ -742,7 +742,7 @@ impl Renderer {
         let commandpool_create_info = vk::CommandPoolCreateInfo {
             s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
             p_next: ptr::null(),
-            flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            flags: vk::CommandPoolCreateFlags::TRANSIENT,
             queue_family_index: queue_family_index as u32,
             _marker: PhantomData,
         };
@@ -786,7 +786,7 @@ impl Renderer {
 
         let clear_values = [vk::ClearValue {
             color: vk::ClearColorValue {
-                float32: [0.3, 0.0, 0.0, 1.0],
+                float32: [1.0, 1.0, 1.0, 1.0],
             },
         }];
 
@@ -831,13 +831,13 @@ impl Renderer {
             s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::SemaphoreCreateFlags::empty(),
-            _marker: Default::default(),
+            _marker: PhantomData,
         };
         let fence_create_info = vk::FenceCreateInfo {
             s_type: vk::StructureType::FENCE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::FenceCreateFlags::SIGNALED,
-            _marker: Default::default(),
+            _marker: PhantomData,
         };
 
         for _ in 0..images_len {
@@ -849,6 +849,66 @@ impl Renderer {
         }
 
         Ok((available, finished, can_draw))
+    }
+
+    #[inline]
+    fn draw(&mut self) -> VkResult<()> {
+        let current_img = (self.current_image + 1) % self.images.len();
+        self.current_image = current_img;
+
+        unsafe {
+            let (img_index, _) = self.swapchain_loader.acquire_next_image(
+                self.swapchain,
+                u64::MAX,
+                self.image_available[current_img],
+                vk::Fence::null(),
+            )?;
+
+            self.device
+                .wait_for_fences(&[self.can_draw[current_img]], true, u64::MAX)?;
+
+            self.device.reset_fences(&[self.can_draw[current_img]])?;
+
+            let submit_info = [vk::SubmitInfo {
+                s_type: vk::StructureType::SUBMIT_INFO,
+                p_next: ptr::null(),
+                wait_semaphore_count: 1,
+                p_wait_semaphores: [self.image_available[current_img]].as_ptr(),
+                p_wait_dst_stage_mask: [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT].as_ptr(),
+                command_buffer_count: 1,
+                p_command_buffers: [self.command_buffers[current_img]].as_ptr(),
+                signal_semaphore_count: 1,
+                p_signal_semaphores: [self.rendering_finished[current_img]].as_ptr(),
+                _marker: PhantomData,
+            }];
+
+            self.device.queue_submit(
+                self.present_graphics_queue,
+                &submit_info,
+                self.can_draw[current_img],
+            )?;
+
+            let present_info = vk::PresentInfoKHR {
+                s_type: vk::StructureType::PRESENT_INFO_KHR,
+                p_next: ptr::null(),
+                wait_semaphore_count: 1,
+                p_wait_semaphores: [self.rendering_finished[current_img]].as_ptr(),
+                swapchain_count: 1,
+                p_swapchains: [self.swapchain].as_ptr(),
+                p_image_indices: [img_index].as_ptr(),
+                p_results: ptr::null_mut(),
+                _marker: PhantomData,
+            };
+
+            self.swapchain_loader
+                .queue_present(self.present_graphics_queue, &present_info)?;
+        };
+        Ok(())
+    }
+
+    fn recreate_swapchain(&mut self) -> VkResult<()> {
+        unsafe { self.device.device_wait_idle()? };
+        Ok(())
     }
 }
 
@@ -870,68 +930,23 @@ impl winit::application::ApplicationHandler for App {
         event: winit::event::WindowEvent,
     ) {
         match event {
-            winit::event::WindowEvent::CloseRequested => event_loop.exit(),
-            winit::event::WindowEvent::RedrawRequested => {
-                let renderer = self.renderer.as_mut().unwrap();
-                renderer.current_image = (renderer.current_image + 1) % renderer.images.len();
-                println!("Curr img {}", renderer.current_image);
-                let img_index = unsafe {
-                    renderer
-                        .swapchain_loader
-                        .acquire_next_image(
-                            renderer.swapchain,
-                            u64::MAX,
-                            renderer.image_available[renderer.current_image],
-                            vk::Fence::null(),
-                        )
+            winit::event::WindowEvent::CloseRequested => {
+                unsafe {
+                    self.renderer
+                        .as_ref()
                         .unwrap()
-                        .0 as usize
-                };
-                unsafe {
-                    let fences = [renderer.can_draw[renderer.current_image]];
-                    renderer
                         .device
-                        .wait_for_fences(&fences, true, u64::MAX)
+                        .device_wait_idle()
                         .unwrap();
-                    renderer.device.reset_fences(&fences).unwrap();
-                };
-
-                let semaphores_available = [renderer.image_available[renderer.current_image]];
-                let waiting_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-                let semaphores_finished = [renderer.rendering_finished[renderer.current_image]];
-                let command_buffers = [renderer.command_buffers[img_index]];
-
-                let submit_info = [vk::SubmitInfo::default()
-                    .wait_semaphores(&semaphores_available)
-                    .wait_dst_stage_mask(&waiting_stages)
-                    .command_buffers(&command_buffers)
-                    .signal_semaphores(&semaphores_finished)];
-
-                unsafe {
-                    renderer
-                        .device
-                        .queue_submit(
-                            renderer.present_graphics_queue,
-                            &submit_info,
-                            renderer.can_draw[renderer.current_image],
-                        )
-                        .unwrap();
-                };
-
-                let swapchains = [renderer.swapchain];
-                let indeces = [img_index as u32];
-
-                let present_info = vk::PresentInfoKHR::default()
-                    .wait_semaphores(&semaphores_finished)
-                    .swapchains(&swapchains)
-                    .image_indices(&indeces);
-
-                unsafe {
-                    renderer
-                        .swapchain_loader
-                        .queue_present(renderer.present_graphics_queue, &present_info)
-                        .unwrap();
-                };
+                }
+                event_loop.exit();
+            }
+            winit::event::WindowEvent::RedrawRequested => {
+                self.renderer
+                    .as_mut()
+                    .unwrap()
+                    .draw()
+                    .unwrap_or_else(|err| println!("Error while drawing : {}", err));
             }
             _ => (),
         }
@@ -939,5 +954,36 @@ impl winit::application::ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
         self.renderer.as_ref().unwrap().window.request_redraw();
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        unsafe {
+            for i in 0..self.can_draw.len() {
+                self.device.destroy_semaphore(self.image_available[i], None);
+                self.device
+                    .destroy_semaphore(self.rendering_finished[i], None);
+                self.device.destroy_fence(self.can_draw[i], None);
+            }
+            self.device.destroy_command_pool(self.command_pool, None);
+            self.device.destroy_pipeline(self.pipeline, None);
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+            for i in 0..self.framebuffers.len() {
+                self.device.destroy_framebuffer(self.framebuffers[i], None);
+            }
+            self.device.destroy_render_pass(self.render_pass, None);
+            for i in 0..self.image_views.len() {
+                self.device.destroy_image_view(self.image_views[i], None);
+            }
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
+            self.device.destroy_device(None);
+            self.surface_loader.destroy_surface(self.surface, None);
+            self.debug_utils
+                .destroy_debug_utils_messenger(self.debug_utils_messenger, None);
+            self.instance.destroy_instance(None);
+        };
     }
 }

@@ -7,4 +7,4 @@ author = "Quandraxus Maximus"
 [dependencies]
 ash = "0.38.0"
 glam = "0.28.0"
-winit = "0.30.3"
+winit = "0.30.5"
